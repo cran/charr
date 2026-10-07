@@ -1,0 +1,257 @@
+#!/bin/sh
+# charr configure: choose the system ICU4C or the vendored bundle.
+#
+# CRAN prefers system libraries where available, so this script probes for a
+# allowlisted system ICU4C candidate with pkg-config and links against it when
+# the structural and service probes pass. Otherwise (and always on Windows,
+# which has no configure, and by default on macOS) charr compiles
+# its vendored, symbol-suffixed ICU and installs its packaged data archive.
+# System ICU acceptance is an explicit candidate allowlist, not an open-ended
+# version range. The reproducible bundle is ICU 78.3.
+#
+# Controls:
+#   CHARR_SYSTEM_ICU=no   (or --without-system-icu)  force the bundle
+#   CHARR_SYSTEM_ICU=yes  (or --with-system-icu)     require system ICU; fail
+#                                                    instead of falling back
+#   unset                                            auto-detect; the bundle
+#                                                    on macOS
+#
+# Outputs: src/Makevars (from src/Makevars.in) and src/icu_mode (read by
+# src/install.libs.R to decide whether to install the bundled data archive).
+# `cleanup` removes both.
+
+set -u
+
+ICU_CANDIDATE_VERSIONS="78.2 78.3"
+
+want="${CHARR_SYSTEM_ICU:-auto}"
+for arg in "$@"; do
+  case "$arg" in
+    --with-system-icu)    want=yes ;;
+    --without-system-icu) want=no ;;
+  esac
+done
+
+if [ -z "${R_HOME:-}" ]; then
+  R_HOME=$(R RHOME)
+fi
+
+emit() {
+  mode="$1" cppflags="$2" libs="$3" targets="$4"
+  sed -e "s|@ICU_CPPFLAGS@|$cppflags|" \
+      -e "s|@ICU_LIBS@|$libs|" \
+      -e "s|@ICU_STATIC_TARGETS@|$targets|" \
+      src/Makevars.in > src/Makevars.new
+  # Object files compiled under the other mode reference different symbols
+  # (the bundle suffixes every ICU symbol); purge them when flags change so
+  # a mode switch cannot link stale objects.
+  if [ -f src/Makevars ] && ! cmp -s src/Makevars.new src/Makevars; then
+    echo "* charr: build flags changed; removing cached object files"
+    rm -f src/*.o src/base_backend/*.o src/altrep_backend/io/*.o src/altrep_backend/*.o \
+          src/icu78/common/*.o \
+          src/icu78/i18n/*.o src/icu78/stubdata/*.o src/*.a
+  fi
+  mv src/Makevars.new src/Makevars
+  printf '%s\n' "$mode" > src/icu_mode
+  echo "* charr: using $mode ICU"
+}
+
+emit_bundle() {
+  # DECNUMDIGITS=4 is the established stringi build setting for the bundled
+  # decimal implementation and avoids GCC 15 overflow diagnostics.
+  emit bundle \
+    "-Iicu78 -Iicu78/unicode -Iicu78/common -Iicu78/i18n -DU_STATIC_IMPLEMENTATION -DU_COMMON_IMPLEMENTATION -DU_I18N_IMPLEMENTATION -D_REENTRANT -DUCONFIG_USE_LOCAL -DU_CHARSET_IS_UTF8=0 -DU_HAVE_ELF_H -DUCONFIG_NO_FILE_IO=1 -DDECNUMDIGITS=4 -DSTRI_ICU_FOUND=0 -DU_HAVE_LIB_SUFFIX=1 -DU_LIB_SUFFIX_C_NAME=_charr -DCHARR_BUNDLED_ICU=1" \
+    "-L. -licu_i18n -licu_common -licu_stubdata" \
+    "libicu_common.a libicu_i18n.a libicu_stubdata.a"
+  exit 0
+}
+
+fail_or_bundle() {
+  echo "* charr: $1"
+  if [ "$want" = yes ]; then
+    echo "*** CHARR_SYSTEM_ICU=yes was set, so this is an error." >&2
+    exit 1
+  fi
+  emit_bundle
+}
+
+if [ "$want" = no ]; then
+  echo "* charr: system ICU disabled by request"
+  emit_bundle
+fi
+
+# CRAN distributes macOS binaries, which must not depend on a shared ICU that
+# users may not have, so macOS takes the static bundle unless a system ICU is
+# requested explicitly.
+if [ "$want" = auto ] && [ "$(uname -s)" = Darwin ]; then
+  echo "* charr: macOS uses the bundled ICU unless CHARR_SYSTEM_ICU=yes"
+  emit_bundle
+fi
+
+PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
+if ! command -v "$PKG_CONFIG" >/dev/null 2>&1; then
+  fail_or_bundle "pkg-config not found"
+fi
+if ! "$PKG_CONFIG" --exists icu-i18n icu-uc 2>/dev/null; then
+  fail_or_bundle "pkg-config does not know icu-i18n/icu-uc"
+fi
+ICU_UC_VERSION=$("$PKG_CONFIG" --modversion icu-uc)
+ICU_I18N_VERSION=$("$PKG_CONFIG" --modversion icu-i18n)
+if [ "$ICU_UC_VERSION" != "$ICU_I18N_VERSION" ]; then
+  fail_or_bundle "icu-uc $ICU_UC_VERSION and icu-i18n $ICU_I18N_VERSION do not match"
+fi
+
+icu_candidate=no
+for candidate in $ICU_CANDIDATE_VERSIONS; do
+  if [ "$ICU_UC_VERSION" = "$candidate" ]; then
+    icu_candidate=yes
+    break
+  fi
+done
+if [ "$icu_candidate" != yes ]; then
+  fail_or_bundle "system ICU4C $ICU_UC_VERSION is not allowlisted (candidates: $ICU_CANDIDATE_VERSIONS)"
+fi
+
+ICU_CFLAGS=$("$PKG_CONFIG" --cflags icu-i18n icu-uc)
+ICU_LIBS=$("$PKG_CONFIG" --libs icu-i18n icu-uc)
+
+# Compile, link, and run a probe against the advertised flags. Linking is not
+# enough: the runtime library and data must match the headers, and every ICU
+# service used by the stringr surface must be available. ICU 78 requires C++17,
+# which is also the package standard.
+if CXX17=$("${R_HOME}/bin/R" CMD config CXX17 2>/dev/null) &&
+   CXX17FLAGS=$("${R_HOME}/bin/R" CMD config CXX17FLAGS 2>/dev/null) &&
+   CXX17STD=$("${R_HOME}/bin/R" CMD config CXX17STD 2>/dev/null); then
+  CXX=$CXX17
+  CXXFLAGS=$CXX17FLAGS
+  CXX_STD_FLAG=$CXX17STD
+else
+  CXX=$("${R_HOME}/bin/R" CMD config CXX)
+  CXXFLAGS=$("${R_HOME}/bin/R" CMD config CXXFLAGS)
+  CXX_STD_FLAG=-std=gnu++17
+fi
+
+tmpd=$(mktemp -d "${TMPDIR:-/tmp}/charr-conf-XXXXXX") || exit 1
+trap 'rm -rf "$tmpd"' EXIT
+
+cat > "$tmpd/probe.cpp" <<'EOF'
+#include <unicode/uclean.h>
+#include <unicode/ucnv.h>
+#include <unicode/uloc.h>
+#include <unicode/ucol.h>
+#include <unicode/ubrk.h>
+#include <unicode/icudataver.h>
+#include <unicode/unorm2.h>
+#include <unicode/uregex.h>
+#include <unicode/ustring.h>
+#include <unicode/uvernum.h>
+#include <unicode/uversion.h>
+#include <cstring>
+#include <cstdio>
+
+#ifndef UCONFIG_NO_CONVERSION
+#define UCONFIG_NO_CONVERSION 0
+#endif
+#ifndef UCONFIG_NO_NORMALIZATION
+#define UCONFIG_NO_NORMALIZATION 0
+#endif
+#ifndef UCONFIG_NO_BREAK_ITERATION
+#define UCONFIG_NO_BREAK_ITERATION 0
+#endif
+#ifndef UCONFIG_NO_COLLATION
+#define UCONFIG_NO_COLLATION 0
+#endif
+#ifndef UCONFIG_NO_REGULAR_EXPRESSIONS
+#define UCONFIG_NO_REGULAR_EXPRESSIONS 0
+#endif
+
+int main() {
+    UErrorCode status = U_ZERO_ERROR;
+    u_init(&status);
+    if (U_FAILURE(status)) return 10;
+
+    UVersionInfo runtime_version;
+    UVersionInfo data_version;
+    UVersionInfo unicode_version;
+    char runtime_string[U_MAX_VERSION_STRING_LENGTH];
+    char data_string[U_MAX_VERSION_STRING_LENGTH];
+    char unicode_string[U_MAX_VERSION_STRING_LENGTH];
+    u_getVersion(runtime_version);
+    u_getDataVersion(data_version, &status);
+    u_getUnicodeVersion(unicode_version);
+    if (U_FAILURE(status)) return 11;
+    u_versionToString(runtime_version, runtime_string);
+    u_versionToString(data_version, data_string);
+    u_versionToString(unicode_version, unicode_string);
+    if (std::strcmp(U_ICU_VERSION, runtime_string) != 0) return 12;
+    if (std::strcmp(runtime_string, data_string) != 0) return 13;
+
+    if (ucnv_countAvailable() <= 0) return 20;
+    if (uloc_countAvailable() <= 0) return 21;
+    UConverter* converter = ucnv_open("Shift_JIS", &status);
+    if (U_FAILURE(status) || converter == NULL) return 22;
+    ucnv_close(converter);
+
+    const UNormalizer2* normalizer = unorm2_getNFCInstance(&status);
+    if (U_FAILURE(status) || normalizer == NULL) return 23;
+
+    UCollator* coll = ucol_open("de@collation=phonebook", &status);
+    if (U_FAILURE(status) || coll == NULL) return 24;
+    ucol_close(coll);
+
+    UBreakIterator* brk = ubrk_open(UBRK_WORD, "en", NULL, 0, &status);
+    if (U_FAILURE(status) || brk == NULL) return 25;
+    ubrk_close(brk);
+
+    UChar pattern[16];
+    UChar subject[4];
+    int32_t pattern_length = 0;
+    int32_t subject_length = 0;
+    u_strFromUTF8(pattern, 16, &pattern_length, "\\p{L}", -1, &status);
+    u_strFromUTF8(subject, 4, &subject_length, "\xc3\xa9", -1, &status);
+    URegularExpression* regex = uregex_open(
+        pattern, pattern_length, 0, NULL, &status
+    );
+    if (U_FAILURE(status) || regex == NULL) return 26;
+    uregex_setText(regex, subject, subject_length, &status);
+    UBool found = U_FAILURE(status) ? static_cast<UBool>(false) :
+        uregex_find(regex, 0, &status);
+    uregex_close(regex);
+    if (U_FAILURE(status) || !found) return 27;
+
+    std::printf(
+        "%s|%s|%s|%s|%d|%d|%d|%d|%d|%d\n",
+        U_ICU_VERSION, runtime_string, data_string, unicode_string,
+        U_CHARSET_IS_UTF8,
+        UCONFIG_NO_CONVERSION,
+        UCONFIG_NO_NORMALIZATION,
+        UCONFIG_NO_BREAK_ITERATION,
+        UCONFIG_NO_COLLATION,
+        UCONFIG_NO_REGULAR_EXPRESSIONS
+    );
+    return 0;
+}
+EOF
+
+# $CXX may legitimately contain flags (e.g. "g++ -std=gnu++20"): do not quote.
+if ! $CXX $CXXFLAGS $CXX_STD_FLAG $ICU_CFLAGS "$tmpd/probe.cpp" -o "$tmpd/probe" \
+     $ICU_LIBS >"$tmpd/probe.log" 2>&1; then
+  sed -n '1,120p' "$tmpd/probe.log" >&2
+  fail_or_bundle "system ICU probe failed to compile/link"
+fi
+if ! probe_info=$("$tmpd/probe"); then
+  fail_or_bundle "system ICU probe failed to run (missing/incomplete data?)"
+fi
+
+probe_compile_version=${probe_info%%|*}
+if [ "$probe_compile_version" != "$ICU_UC_VERSION" ]; then
+  fail_or_bundle "pkg-config reports ICU $ICU_UC_VERSION but headers report $probe_compile_version"
+fi
+
+echo "* charr: system ICU4C $ICU_UC_VERSION passed the candidate probes"
+echo "* charr: release certification still requires the platform CI matrix"
+echo "* charr: ICU probe $probe_info"
+emit system \
+  "$ICU_CFLAGS -D_REENTRANT -DSTRI_ICU_FOUND=1 -DCHARR_BUNDLED_ICU=0" \
+  "$ICU_LIBS" \
+  ""

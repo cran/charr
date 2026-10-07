@@ -1,0 +1,418 @@
+#include "utf8_output.h"
+
+#include <limits>
+#include <stdexcept>
+#include <utility>
+
+namespace charr {
+namespace altrep_backend {
+namespace io {
+
+namespace utf8_output {
+
+CHARR_NEUTRAL_HELPER const char* empty_payload() noexcept
+{
+    static const char value = '\0';
+    return &value;
+}
+
+CHARR_CXX_HELPER int checked_length(std::size_t length)
+{
+    if (length > static_cast<std::size_t>(R_LEN_T_MAX))
+        throw std::length_error("character output exceeds R's string length limit");
+    return static_cast<int>(length);
+}
+
+CHARR_NEUTRAL_HELPER bool is_ascii(
+    const char* data, std::size_t length
+) noexcept
+{
+    for (std::size_t i = 0; i < length; ++i) {
+        if (static_cast<unsigned char>(data[i]) > 0x7fU)
+            return false;
+    }
+    return true;
+}
+
+CHARR_CXX_HELPER cetype_ext_t resolved_encoding(
+    const char* data, std::size_t length, cetype_ext_t encoding
+)
+{
+    switch (encoding.value) {
+    case CETYPE_EXT_ASCII.value:
+    case CETYPE_EXT_UTF8.value:
+    case CETYPE_EXT_BYTES.value:
+    case CETYPE_EXT_LATIN1.value:
+    case CETYPE_EXT_NATIVE.value:
+        return encoding;
+    case CETYPE_EXT_ASCII_OR_UTF8.value:
+        return is_ascii(data, length)
+            ? CETYPE_EXT_ASCII
+            : CETYPE_EXT_UTF8;
+    case CETYPE_EXT_NA.value:
+        return CETYPE_EXT_NA;
+    default:
+        throw std::invalid_argument("unknown character output encoding");
+    }
+}
+
+CHARR_CXX_HELPER cetype_ext_t reserve_encoding(cetype_ext_t encoding)
+{
+    switch (encoding.value) {
+    case CETYPE_EXT_ASCII.value:
+    case CETYPE_EXT_UTF8.value:
+    case CETYPE_EXT_BYTES.value:
+    case CETYPE_EXT_LATIN1.value:
+    case CETYPE_EXT_NATIVE.value:
+    case CETYPE_EXT_NA.value:
+        return encoding;
+    case CETYPE_EXT_ASCII_OR_UTF8.value:
+        throw std::invalid_argument(
+            "cannot reserve output with an unresolved ASCII-or-UTF-8 mark"
+        );
+    default:
+        throw std::invalid_argument("unknown character output encoding");
+    }
+}
+
+} // namespace utf8_output
+
+using namespace utf8_output;
+
+OutputRecord missing_output_record() noexcept
+{
+    return make_strview(nullptr, NA_INTEGER, CETYPE_EXT_NA);
+}
+
+OutputRecord output_record(
+    const char* data, std::size_t length, cetype_ext_t encoding
+)
+{
+    if (encoding == CETYPE_EXT_NA)
+        return missing_output_record();
+    if (data == nullptr) {
+        if (length != 0)
+            throw std::invalid_argument("null character output has nonzero length");
+        data = empty_payload();
+    }
+
+    const int stored_length = checked_length(length);
+    return make_strview(
+        data, stored_length, resolved_encoding(data, length, encoding)
+    );
+}
+
+OutputRecord output_record(
+    std::string_view value, cetype_ext_t encoding
+)
+{
+    return output_record(value.data(), value.size(), encoding);
+}
+
+OutputRecord output_record(const charport::StrView& value)
+{
+    if (value.is_na())
+        return missing_output_record();
+    if (value.len < 0)
+        throw std::invalid_argument("character output has a negative length");
+    return output_record(
+        value.ptr, static_cast<std::size_t>(value.len), value.enc
+    );
+}
+
+OutputStore scalar_store(const OutputRecord& value)
+{
+    const OutputRecord normalized = output_record(value);
+    if (normalized.is_na()) {
+        return OutputStore::scalar(
+            nullptr, 0, CETYPE_EXT_NA
+        );
+    }
+    return OutputStore::scalar(
+        normalized.ptr, static_cast<std::size_t>(normalized.len),
+        normalized.enc
+    );
+}
+
+OutputStore scalar_store(
+    const char* data, std::size_t length, cetype_ext_t encoding
+)
+{
+    return scalar_store(output_record(data, length, encoding));
+}
+
+OutputStore scalar_store(
+    std::string_view value, cetype_ext_t encoding
+)
+{
+    return scalar_store(output_record(value, encoding));
+}
+
+OutputStore concat_stores(std::vector<OutputStore>& stores)
+{
+    std::size_t total = 0;
+    for (std::size_t i = 0; i < stores.size(); ++i) {
+        const std::size_t current = stores[i].size();
+        if (current > std::numeric_limits<std::size_t>::max()-total)
+            throw std::length_error("character output is too long");
+        total += current;
+    }
+
+    OutputStore output(total, 0);
+    std::size_t position = 0;
+    for (std::size_t i = 0; i < stores.size(); ++i) {
+        OutputStore& current = stores[i];
+        for (std::size_t j = 0; j < current.size(); ++j) {
+            const OutputRecord value = current.view(j);
+            output.records.set(
+                position++, value.ptr, value.len, value.enc
+            );
+        }
+        output.slices.prepend(current.slices);
+    }
+    return output;
+}
+
+ChunkStores::ChunkStores()
+    : rows_()
+{
+}
+
+void ChunkStores::reset(unsigned workers)
+{
+    rows_.clear();
+    rows_.resize(static_cast<std::size_t>(workers));
+}
+
+void ChunkStores::open(unsigned worker, R_xlen_t begin)
+{
+    std::vector<Entry>& row = rows_.at(static_cast<std::size_t>(worker));
+    row.push_back(Entry());
+    row.back().begin = begin;
+}
+
+OutputStore& ChunkStores::current(unsigned worker)
+{
+    std::vector<Entry>& row = rows_.at(static_cast<std::size_t>(worker));
+    if (row.empty())
+        throw std::logic_error("chunk output used before its chunk opened");
+    return row.back().store;
+}
+
+OutputStore ChunkStores::concatenate()
+{
+    // Merge the per-worker rows on their chunk key. Each row is already
+    // ascending, so this walks every row once and never sorts.
+    std::vector<std::size_t> cursors(rows_.size(), 0);
+    std::vector<OutputStore> ordered;
+    for (;;) {
+        std::size_t chosen = rows_.size();
+        for (std::size_t row = 0; row < rows_.size(); ++row) {
+            const std::size_t at = cursors[row];
+            if (at >= rows_[row].size())
+                continue;
+            if (chosen == rows_.size() ||
+                    rows_[row][at].begin < rows_[chosen][cursors[chosen]].begin) {
+                chosen = row;
+            }
+        }
+        if (chosen == rows_.size())
+            break;
+        ordered.push_back(std::move(rows_[chosen][cursors[chosen]].store));
+        ++cursors[chosen];
+    }
+    return concat_stores(ordered);
+}
+
+OutputBuilder::OutputBuilder(R_xlen_t size)
+    : size_(size), builder_(size)
+{
+}
+
+R_xlen_t OutputBuilder::size() const noexcept
+{
+    return size_;
+}
+
+void OutputBuilder::set(R_xlen_t index, const OutputRecord& value)
+{
+    const OutputRecord normalized = output_record(value);
+    if (normalized.is_na()) {
+        builder_.set_na(index);
+        return;
+    }
+    builder_.set(index, normalized);
+}
+
+void OutputBuilder::set(
+    R_xlen_t index, const char* data, std::size_t length,
+    cetype_ext_t encoding
+)
+{
+    set_validated(index, output_record(data, length, encoding));
+}
+
+void OutputBuilder::set(
+    R_xlen_t index, std::string_view value, cetype_ext_t encoding
+)
+{
+    set_validated(index, output_record(value, encoding));
+}
+
+char* OutputBuilder::reserve(
+    R_xlen_t index, std::size_t length, cetype_ext_t encoding
+)
+{
+    const cetype_ext_t checked_encoding = reserve_encoding(encoding);
+    if (checked_encoding == CETYPE_EXT_NA)
+        return builder_.reserve(index, 0, checked_encoding);
+    (void)checked_length(length);
+    return builder_.reserve(index, length, checked_encoding);
+}
+
+SEXP OutputBuilder::to_sexp() noexcept
+{
+    size_ = 0;
+    return builder_.to_sexp();
+}
+
+ParallelOutputBuilder::ParallelOutputBuilder()
+    : size_(0), builder_(0, 1)
+{
+}
+
+R_xlen_t ParallelOutputBuilder::size() const noexcept
+{
+    return size_;
+}
+
+void ParallelOutputBuilder::set(
+    unsigned worker, R_xlen_t index, const OutputRecord& value
+)
+{
+    const OutputRecord normalized = output_record(value);
+    if (normalized.is_na()) {
+        builder_.set_na(worker, index);
+        return;
+    }
+    builder_.set(worker, index, normalized);
+}
+
+void ParallelOutputBuilder::set(
+    unsigned worker, R_xlen_t index, const char* data,
+    std::size_t length, cetype_ext_t encoding
+)
+{
+    set_validated(worker, index, output_record(data, length, encoding));
+}
+
+void ParallelOutputBuilder::set(
+    unsigned worker, R_xlen_t index, std::string_view value,
+    cetype_ext_t encoding
+)
+{
+    set_validated(worker, index, output_record(value, encoding));
+}
+
+char* ParallelOutputBuilder::reserve(
+    unsigned worker, R_xlen_t index, std::size_t length,
+    cetype_ext_t encoding
+)
+{
+    const cetype_ext_t checked_encoding = reserve_encoding(encoding);
+    if (checked_encoding == CETYPE_EXT_NA)
+        return builder_.reserve(worker, index, 0, checked_encoding);
+    (void)checked_length(length);
+    return builder_.reserve(worker, index, length, checked_encoding);
+}
+
+SEXP ParallelOutputBuilder::to_sexp() noexcept
+{
+    size_ = 0;
+    return builder_.to_sexp();
+}
+
+GrowableOutputBuilder::GrowableOutputBuilder()
+    : builder_()
+{
+}
+
+void GrowableOutputBuilder::reset() noexcept
+{
+    builder_ = charport::charvec::GrowableBuilder();
+}
+
+std::size_t GrowableOutputBuilder::size() const noexcept
+{
+    return builder_.size();
+}
+
+void GrowableOutputBuilder::append(const OutputRecord& value)
+{
+    const OutputRecord normalized = output_record(value);
+    if (normalized.is_na()) {
+        builder_.append(nullptr, 0, CETYPE_EXT_NA);
+        return;
+    }
+    builder_.append(normalized);
+}
+
+void GrowableOutputBuilder::append(
+    const char* data, std::size_t length, cetype_ext_t encoding
+)
+{
+    const OutputRecord normalized = output_record(
+        data, length, encoding
+    );
+    if (normalized.is_na()) {
+        builder_.append(nullptr, 0, CETYPE_EXT_NA);
+        return;
+    }
+    builder_.append(normalized);
+}
+
+void GrowableOutputBuilder::append(
+    std::string_view value, cetype_ext_t encoding
+)
+{
+    const OutputRecord normalized = output_record(value, encoding);
+    if (normalized.is_na()) {
+        builder_.append(nullptr, 0, CETYPE_EXT_NA);
+        return;
+    }
+    builder_.append(normalized);
+}
+
+void GrowableOutputBuilder::append_na()
+{
+    builder_.append(nullptr, 0, CETYPE_EXT_NA);
+}
+
+char* GrowableOutputBuilder::append_reserve(
+    std::size_t length, cetype_ext_t encoding
+)
+{
+    const cetype_ext_t checked_encoding = reserve_encoding(encoding);
+    if (checked_encoding == CETYPE_EXT_NA)
+        return builder_.append_reserve(0, checked_encoding);
+    (void)checked_length(length);
+    return builder_.append_reserve(length, checked_encoding);
+}
+
+OutputStore GrowableOutputBuilder::release_store() noexcept
+{
+    OutputStore store = builder_.release_store();
+    reset();
+    return store;
+}
+
+SEXP GrowableOutputBuilder::to_sexp() noexcept
+{
+    SEXP result = builder_.to_sexp();
+    reset();
+    return result;
+}
+
+} // namespace io
+} // namespace altrep_backend
+} // namespace charr

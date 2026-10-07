@@ -1,0 +1,181 @@
+
+/* This file is part of the 'stringi' project.
+ * Copyright (c) 2013-2025, Marek Gagolewski <https://www.gagolewski.com/>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ * this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,
+ * BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+ * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+ * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+
+#ifndef __ci_string8buf_h
+#define __ci_string8buf_h
+
+#include "ci_stringi.h"
+#include "../shared/lint.h"
+#include <deque>
+#include <limits>
+
+namespace charr { namespace altrep_backend {
+
+
+/**
+ * [DEPRECATED] A class to represent a temporary string buffer
+ *
+ * Quite similar to std::string and/or std::vector<char>;
+ * actually, we could/should now
+ * TODO: rewrite most code to use the C++11 std::string.
+ *
+ * @version 0.2-1 (Marek Gagolewski, 2014-03-24)
+ *          Separate mutable buffer type
+ *
+ * @version charr 0.1.0
+ *          This is reusable output scratch; input records remain view-only.
+ *
+ * @version 0.5-1 (Marek Gagolewski, 2015-02-14)
+ *          Use malloc+realloc
+ */
+class CHARR_OWNER_TYPE String8buf  {
+
+private:
+
+    char* m_str;
+    size_t m_size;   ///< physical buffer size in bytes
+
+
+public:
+
+
+    /** allocate string buffer
+     *
+     * @param size buffer length-1
+     */
+    CHARR_CXX_HELPER String8buf(size_t size=0) {
+        if (size == std::numeric_limits<size_t>::max())
+            throw StriException(MSG__BUF_SIZE_EXCEEDED);
+        const size_t new_size = size+1;
+        char* new_str = (char*)malloc(sizeof(char)*new_size);
+        STRI_ASSERT(new_str);
+        if (!new_str)
+            throw StriException(
+                MSG__MEM_ALLOC_ERROR_WITH_SIZE, sizeof(char)*new_size
+            );
+        this->m_size = new_size;
+        this->m_str = new_str;
+        this->m_str[0] = '\0';
+    }
+
+
+    /** destructor */
+    CHARR_CXX_HELPER ~String8buf() noexcept
+    {
+        if (this->m_str) {
+            free(this->m_str);
+            this->m_str = NULL;
+        }
+    }
+
+    /** copy constructor */
+    CHARR_CXX_HELPER String8buf(const String8buf& s)
+    {
+        this->m_size = s.m_size;
+        this->m_str = (char*)malloc(sizeof(char)*this->m_size);
+        STRI_ASSERT(this->m_str);
+        if (!this->m_str)
+            throw StriException(MSG__MEM_ALLOC_ERROR_WITH_SIZE, sizeof(char)*this->m_size);
+        memcpy(this->m_str, s.m_str, (size_t)this->m_size);
+    }
+
+    /** copy */
+    CHARR_CXX_HELPER String8buf& operator=(const String8buf& s)
+    {
+        if (this == &s)
+            return *this;
+
+        char* new_str = (char*)malloc(sizeof(char)*s.m_size);
+        STRI_ASSERT(new_str);
+        if (!new_str)
+            throw StriException(
+                MSG__MEM_ALLOC_ERROR_WITH_SIZE, sizeof(char)*s.m_size
+            );
+        memcpy(new_str, s.m_str, (size_t)s.m_size);
+
+        free(this->m_str);
+        this->m_str = new_str;
+        this->m_size = s.m_size;
+
+        return *this;
+    }
+
+
+    /* return data */
+    CHARR_NEUTRAL_HELPER inline char* data() noexcept
+    {
+        return this->m_str;
+    }
+
+
+    /** buffer size in bytes */
+    CHARR_NEUTRAL_HELPER inline size_t size() const noexcept
+    {
+        return this->m_size;
+    }
+
+
+    /** increase buffer size;
+     *
+     * @param size new size-1
+     * @param copy should the existing buffer content be retained?
+     */
+    CHARR_CXX_HELPER inline void resize(size_t size, bool copy=true)
+    {
+        if (this->m_size > size)
+            return; // do nothing (the requested buffer size is available)
+
+        if (size == std::numeric_limits<size_t>::max())
+            throw StriException(MSG__BUF_SIZE_EXCEEDED);
+        const size_t new_size = size+1;
+        char* new_str = (char*)realloc(
+            this->m_str, sizeof(char)*new_size
+        );
+        STRI_ASSERT(new_str);
+        if (!new_str)
+            throw StriException(
+                MSG__MEM_ALLOC_ERROR_WITH_SIZE, sizeof(char)*new_size
+            );
+        this->m_str = new_str;
+        this->m_size = new_size;
+        if (!copy) {
+            this->m_str[0] = '\0';
+        }
+    }
+
+};
+
+
+} } // namespace charr::altrep_backend
+
+#endif

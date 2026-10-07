@@ -1,0 +1,222 @@
+CXX_STD = CXX17
+
+# Template: ../configure generates src/Makevars from this file, substituting
+# the three @...@ tokens for either the system ICU4C (pkg-config) or the
+# vendored bundle in src/icu78 (ICU4C 78.3; Unicode, Inc. and others; Unicode
+# License v3, see src/icu78/LICENSE). Local source adjustments are summarized
+# in src/icu78/UPSTREAM.md; package-specific configuration is supplied by
+# compiler flags and src/uconfig_local.h. In bundle mode the
+# U_HAVE_LIB_SUFFIX / U_LIB_SUFFIX_C_NAME pair renames every ICU C symbol to
+# ...78_charr so charr's statically linked ICU never collides with stringi's
+# or the system's at runtime; in system mode the suffix is off and the
+# vendored headers stay OFF the include path.
+
+# Keep R's short remapping macros from colliding with C++ member names.
+PKG_CPPFLAGS = -DR_NO_REMAP -I. -Ialtrep_backend @ICU_CPPFLAGS@
+# The ALTREP backend runs data-parallel kernels on std::thread workers.
+# SHLIB_PTHREAD_FLAGS is what R knows this platform needs; it is empty where
+# the C++ runtime needs nothing.
+PKG_CXXFLAGS = $(SHLIB_PTHREAD_FLAGS)
+PKG_LIBS = @ICU_LIBS@ $(SHLIB_PTHREAD_FLAGS)
+
+RUNTIME_SOURCES = \
+  runtime/icu.cpp \
+  runtime/registration.cpp
+
+RUNTIME_OBJECTS = $(RUNTIME_SOURCES:.cpp=.o)
+
+SHARED_SOURCES = \
+  shared/boundary_iterator.cpp \
+  shared/case_mapper.cpp \
+  shared/character_class.cpp \
+  shared/character_class_search.cpp \
+  shared/collation_ordering.cpp \
+  shared/collation_search.cpp \
+  shared/collator.cpp \
+  shared/encoding_info.cpp \
+  shared/fixed_search.cpp \
+  shared/icu_fatal.cpp \
+  shared/join.cpp \
+  shared/line_split.cpp \
+  shared/native_to_utf8.cpp \
+  shared/nfc_normalizer.cpp \
+  shared/parallel.cpp \
+  shared/r_matrix.cpp \
+  shared/read_lines.cpp \
+  shared/write_lines.cpp \
+  shared/regex_search.cpp \
+  shared/repeat.cpp \
+  shared/replacement.cpp \
+  shared/substring.cpp \
+  shared/title_case.cpp \
+  shared/utf8.cpp \
+  shared/wrap.cpp
+
+SHARED_OBJECTS = $(SHARED_SOURCES:.cpp=.o)
+
+BASE_FOUNDATION_SOURCES = \
+  base_backend/boundary/options_r.cpp \
+  base_backend/collator/options.cpp \
+  base_backend/fixed/options.cpp \
+  base_backend/regex/options_r.cpp
+
+BASE_SOURCES = \
+  base_backend/entrypoints.cpp \
+  base_backend/ci_compare.cpp \
+  base_backend/ci_dup.cpp \
+  base_backend/ci_duplicated.cpp \
+  base_backend/ci_encoding_conversion.cpp \
+  base_backend/ci_encoding_management.cpp \
+  base_backend/ci_escape.cpp \
+  base_backend/ci_exception.cpp \
+  base_backend/ci_join.cpp \
+  base_backend/ci_length.cpp \
+  base_backend/ci_pad.cpp \
+  base_backend/ci_prepare_arg.cpp \
+  base_backend/ci_reverse.cpp \
+  base_backend/ci_split_lines.cpp \
+  base_backend/ci_search_boundaries_count.cpp \
+  base_backend/ci_search_boundaries_extract.cpp \
+  base_backend/ci_search_boundaries_locate.cpp \
+  base_backend/ci_search_boundaries_split.cpp \
+  base_backend/ci_search_class_replace.cpp \
+  base_backend/ci_search_class_trim.cpp \
+  base_backend/ci_search_coll_count.cpp \
+  base_backend/ci_search_coll_detect.cpp \
+  base_backend/ci_search_coll_extract.cpp \
+  base_backend/ci_search_coll_locate.cpp \
+  base_backend/ci_search_coll_replace.cpp \
+  base_backend/ci_search_coll_split.cpp \
+  base_backend/ci_search_coll_startsendswith.cpp \
+  base_backend/ci_search_common.cpp \
+  base_backend/ci_search_fixed_count.cpp \
+  base_backend/ci_search_fixed_detect.cpp \
+  base_backend/ci_search_fixed_extract_first.cpp \
+  base_backend/ci_search_fixed_extract.cpp \
+  base_backend/ci_search_fixed_locate.cpp \
+  base_backend/ci_search_fixed_replace.cpp \
+  base_backend/ci_search_fixed_split.cpp \
+  base_backend/ci_search_fixed_startsendswith.cpp \
+  base_backend/ci_search_other_split.cpp \
+  base_backend/ci_write_lines.cpp \
+  base_backend/ci_search_regex_count.cpp \
+  base_backend/ci_search_regex_detect.cpp \
+  base_backend/ci_search_regex_extract.cpp \
+  base_backend/ci_search_regex_locate.cpp \
+  base_backend/ci_search_regex_match.cpp \
+  base_backend/ci_search_regex_replace.cpp \
+  base_backend/ci_search_regex_split.cpp \
+  base_backend/ci_order_rank.cpp \
+  base_backend/ci_sub.cpp \
+  base_backend/ci_trans_casemap.cpp \
+  base_backend/ci_trans_title.cpp \
+  base_backend/ci_trans_normalization.cpp \
+  base_backend/ci_ucnv.cpp \
+  base_backend/ci_replace_na.cpp \
+  base_backend/ci_wrap.cpp
+
+BASE_OBJECTS = $(BASE_FOUNDATION_SOURCES:.cpp=.o) \
+  $(BASE_SOURCES:.cpp=.o)
+
+ALTREP_FOUNDATION_SOURCES = \
+  altrep_backend/boundary/options_r.cpp \
+  altrep_backend/collator/options.cpp \
+  altrep_backend/fixed/options.cpp \
+  altrep_backend/regex/options_r.cpp \
+  altrep_backend/io/utf8_output.cpp
+
+ALTREP_SUPPORT_SOURCES = \
+  altrep_backend/entrypoints.cpp \
+  altrep_backend/ci_exception.cpp \
+  altrep_backend/ci_prepare_arg.cpp \
+  altrep_backend/ci_search_common.cpp \
+  altrep_backend/ci_ucnv.cpp
+
+ALTREP_OPERATION_SOURCES = \
+  altrep_backend/ci_compare.cpp \
+  altrep_backend/ci_dup.cpp \
+  altrep_backend/ci_duplicated.cpp \
+  altrep_backend/ci_encoding_conversion.cpp \
+  altrep_backend/ci_encoding_management.cpp \
+  altrep_backend/ci_escape.cpp \
+  altrep_backend/ci_join.cpp \
+  altrep_backend/ci_length.cpp \
+  altrep_backend/ci_pad.cpp \
+  altrep_backend/ci_reverse.cpp \
+  altrep_backend/ci_split_lines.cpp \
+  altrep_backend/ci_search_boundaries_count.cpp \
+  altrep_backend/ci_search_boundaries_extract.cpp \
+  altrep_backend/ci_search_boundaries_locate.cpp \
+  altrep_backend/ci_search_boundaries_split.cpp \
+  altrep_backend/ci_search_class_replace.cpp \
+  altrep_backend/ci_search_class_trim.cpp \
+  altrep_backend/ci_search_coll_count.cpp \
+  altrep_backend/ci_search_coll_detect.cpp \
+  altrep_backend/ci_search_coll_extract.cpp \
+  altrep_backend/ci_search_coll_locate.cpp \
+  altrep_backend/ci_search_coll_replace.cpp \
+  altrep_backend/ci_search_coll_split.cpp \
+  altrep_backend/ci_search_coll_startsendswith.cpp \
+  altrep_backend/ci_search_fixed_count.cpp \
+  altrep_backend/ci_search_fixed_detect.cpp \
+  altrep_backend/ci_search_fixed_extract_first.cpp \
+  altrep_backend/ci_search_fixed_extract.cpp \
+  altrep_backend/ci_search_fixed_locate.cpp \
+  altrep_backend/ci_search_fixed_replace.cpp \
+  altrep_backend/ci_search_fixed_split.cpp \
+  altrep_backend/ci_search_fixed_startsendswith.cpp \
+  altrep_backend/ci_search_other_split.cpp \
+  altrep_backend/ci_write_lines.cpp \
+  altrep_backend/ci_search_regex_count.cpp \
+  altrep_backend/ci_search_regex_detect.cpp \
+  altrep_backend/ci_search_regex_extract.cpp \
+  altrep_backend/ci_search_regex_locate.cpp \
+  altrep_backend/ci_search_regex_match.cpp \
+  altrep_backend/ci_search_regex_replace.cpp \
+  altrep_backend/ci_search_regex_split.cpp \
+  altrep_backend/ci_order_rank.cpp \
+  altrep_backend/ci_sub.cpp \
+  altrep_backend/ci_trans_casemap.cpp \
+  altrep_backend/ci_trans_title.cpp \
+  altrep_backend/ci_trans_normalization.cpp \
+  altrep_backend/ci_replace_na.cpp \
+  altrep_backend/ci_wrap.cpp
+
+ALTREP_SOURCES = $(ALTREP_FOUNDATION_SOURCES) \
+  $(ALTREP_SUPPORT_SOURCES) \
+  $(ALTREP_OPERATION_SOURCES)
+
+ALTREP_OBJECTS = $(ALTREP_SOURCES:.cpp=.o)
+
+OBJECTS = $(RUNTIME_OBJECTS) \
+  $(SHARED_OBJECTS) \
+  $(BASE_OBJECTS) \
+  $(ALTREP_OBJECTS)
+
+ICU_COMMON_OBJECTS = $(patsubst %.cpp,%.o,$(wildcard icu78/common/*.cpp))
+ICU_I18N_OBJECTS = $(patsubst %.cpp,%.o,$(wildcard icu78/i18n/*.cpp))
+ICU_STUBDATA_OBJECTS = $(patsubst %.cpp,%.o,$(wildcard icu78/stubdata/*.cpp))
+ICU_OBJECTS = $(ICU_COMMON_OBJECTS) $(ICU_I18N_OBJECTS) $(ICU_STUBDATA_OBJECTS)
+
+# ICU 78.3 calls deprecated ICU entry points inside its own implementation.
+# Keep those annotations for charr code, but not while compiling ICU itself.
+$(ICU_OBJECTS): PKG_CPPFLAGS += -DU_ATTRIBUTE_DEPRECATED=
+
+.PHONY: all clean
+all: $(SHLIB)
+
+$(SHLIB): $(OBJECTS) @ICU_STATIC_TARGETS@
+
+libicu_common.a: $(ICU_COMMON_OBJECTS)
+	$(AR) -rs $@ $^
+
+libicu_i18n.a: $(ICU_I18N_OBJECTS)
+	$(AR) -rs $@ $^
+
+libicu_stubdata.a: $(ICU_STUBDATA_OBJECTS)
+	$(AR) -rs $@ $^
+
+clean:
+	rm -f $(OBJECTS) $(ICU_COMMON_OBJECTS) $(ICU_I18N_OBJECTS) \
+		$(ICU_STUBDATA_OBJECTS) libicu_common.a libicu_i18n.a libicu_stubdata.a \
+		$(SHLIB) *.so *.dll

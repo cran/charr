@@ -1,0 +1,284 @@
+
+/* This file is part of the 'stringi' project.
+ * Copyright (c) 2013-2025, Marek Gagolewski <https://www.gagolewski.com/>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ * this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,
+ * BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+ * OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+ * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+ * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+#include "ci_stringi.h"
+#include "ci_parallel.h"
+#include "io/reader_utils.h"
+#include "boundary/options_r.h"
+#include "io/string_view.h"
+#include "../shared/boundary_iterator.h"
+#include "../shared/entrypoint.h"
+#include "../shared/native_to_utf8.h"
+#include "../shared/protect.h"
+#include "../shared/slice_arena.h"
+#include "../shared/unwind.h"
+#include "../shared/utf8.h"
+
+#include <charport.h>
+
+#include <cstddef>
+#include <exception>
+#include <stdexcept>
+#include <vector>
+
+namespace charr { namespace altrep_backend {
+
+namespace search_boundaries_count {
+
+struct InputScan {
+    bool direct;
+    bool has_nonmissing;
+};
+
+
+CHARR_CXX_HELPER InputScan scan_direct_input(
+    const charport::StrViews& values
+)
+{
+    bool has_nonmissing = false;
+    for (R_xlen_t i = 0; i < values.size(); ++i) {
+        const charport::StrView value = values[i];
+        if (value.is_na())
+            continue;
+        has_nonmissing = true;
+        if (value.ptr == nullptr || value.len < 0) {
+            throw std::runtime_error(
+                "Reader returned an invalid string view"
+            );
+        }
+        if (value.enc == CETYPE_EXT_BYTES)
+            throw StriException(MSG__BYTESENC);
+        if (value.enc != CETYPE_EXT_ASCII &&
+                value.enc != CETYPE_EXT_UTF8 &&
+                value.enc != CETYPE_EXT_ASCII_OR_UTF8) {
+            return InputScan{false, has_nonmissing};
+        }
+    }
+    return InputScan{true, has_nonmissing};
+}
+
+
+CHARR_CXX_HELPER void require_icu_success(UErrorCode status)
+{
+    if (U_FAILURE(status))
+        throw StriException(status);
+}
+
+
+CHARR_NEUTRAL_HELPER shared::StringView direct_value_at(
+    const charport::StrViews& values, R_len_t index
+) noexcept
+{
+    shared::StringView value = io::as_shared_view(values[index]);
+    if (!value.is_na() &&
+            (value.enc == shared::StringEncoding::utf8 ||
+             value.enc == shared::StringEncoding::ascii_or_utf8) &&
+            value.len >= 3 &&
+            static_cast<unsigned char>(value.ptr[0]) == 0xefU &&
+            static_cast<unsigned char>(value.ptr[1]) == 0xbbU &&
+            static_cast<unsigned char>(value.ptr[2]) == 0xbfU) {
+        value.ptr += 3;
+        value.len -= 3;
+        value.enc = shared::StringEncoding::utf8;
+    }
+    return value;
+}
+
+
+class Body final : public ParallelBody {
+public:
+    CHARR_CXX_HELPER Body(
+        const charport::StrViews& source,
+        const std::vector<shared::StringView>& normalized,
+        bool direct, bool has_nonmissing,
+        const shared::BoundaryOptions& options,
+        int* output, bool& root_fallback
+    ) noexcept
+        : source_(source), normalized_(normalized), direct_(direct),
+          has_nonmissing_(has_nonmissing), options_(options),
+          output_(output), root_fallback_(root_fallback)
+    {
+    }
+
+    CHARR_CXX_HELPER void run(
+        shared::WorkerContext& context
+    ) override
+    {
+        shared::BoundaryIterator counter;
+        if (has_nonmissing_) {
+            const shared::BoundaryOpenResult opened = counter.reset(options_);
+            if (context.worker == 0)
+                root_fallback_ = opened.root_fallback;
+            require_icu_success(opened.status);
+        }
+
+        while (context.next_chunk()) {
+            const R_len_t begin = static_cast<R_len_t>(context.begin);
+            const R_len_t end = static_cast<R_len_t>(context.end);
+            for (R_len_t i = begin; i < end; ++i) {
+                const shared::StringView value = direct_
+                    ? direct_value_at(source_, i)
+                    : normalized_[static_cast<std::size_t>(i)];
+                if (value.is_na()) {
+                    output_[i] = NA_INTEGER;
+                    continue;
+                }
+
+                UErrorCode status = U_ZERO_ERROR;
+                output_[i] = counter.count(value, status);
+                require_icu_success(status);
+            }
+        }
+    }
+
+private:
+    const charport::StrViews& source_;
+    const std::vector<shared::StringView>& normalized_;
+    bool direct_;
+    bool has_nonmissing_;
+    const shared::BoundaryOptions& options_;
+    int* output_;
+    bool& root_fallback_;
+};
+
+
+CHARR_R_HELPER void emit_fallback_warning_r() noexcept
+{
+    Rf_warning(
+        "%s", ICUError::getICUerrorName(U_USING_DEFAULT_WARNING)
+    );
+}
+
+} // namespace search_boundaries_count
+
+using namespace search_boundaries_count;
+
+
+/** Count the number of BreakIterator boundaries
+ *
+ * @param str character vector
+ * @param opts_brkiter identifier
+ * @return integer vector
+ *
+ * @version 0.3-1 (Marek Gagolewski, 2014-10-30)
+ *
+ * @version 0.3-1 (Marek Gagolewski, 2014-11-04)
+ *    Issue #112: str_prepare_arg* retvals were not PROTECTed from gc
+ *
+ * @version 0.4-1 (Marek Gagolewski, 2014-12-02)
+ *          use boundary::Utf8Iterator
+ */
+CHARR_ENTRYPOINT SEXP ci_count_boundaries(
+    SEXP str, SEXP opts_brkiter
+) noexcept {
+    CHARR_ENTRYPOINT_BEGIN();
+
+    str = entry_protections.protect_one(
+        ci__prepare_arg_string_r(str, "str")
+    );
+    const shared::BoundaryOptions options =
+        boundary::prepare_options_r(opts_brkiter, UBRK_LINE);
+
+
+    bool root_fallback_warning = false;
+
+    try {
+        charport::Reader reader;
+        charport::StrViews source_views;
+        shared::NativeToUtf8 converter;
+        shared::SliceArena storage;
+        std::vector<shared::StringView> normalized;
+        result = shared::unwind_protect(
+            unwind_token,
+            [&]() -> SEXP {
+                const R_len_t length = io::checked_r_len(
+                    XLENGTH(str), "character vectors"
+                );
+                result = entry_protections.reprotect_one(
+                    Rf_allocVector(INTSXP, length), result_index
+                );
+                int* output = INTEGER(result);
+
+                reader.reset(str);
+                if (reader.size() != length) {
+                    throw std::runtime_error(
+                        "Reader length changed during boundary counting"
+                    );
+                }
+                source_views.resize(length);
+                if (length > 0) {
+                    reader.views(
+                        0, length,
+                        source_views.ptrs(), source_views.lengths(),
+                        source_views.encodings()
+                    );
+                }
+
+                const InputScan scan = scan_direct_input(source_views);
+                bool has_nonmissing = scan.has_nonmissing;
+                if (!scan.direct) {
+                    normalized.resize(static_cast<std::size_t>(length));
+                    has_nonmissing = false;
+                    for (R_len_t i = 0; i < length; ++i) {
+                        const shared::StringView source =
+                            io::as_shared_view(source_views[i]);
+                        if (source.enc == shared::StringEncoding::bytes)
+                            throw StriException(MSG__BYTESENC);
+                        normalized[static_cast<std::size_t>(i)] =
+                            shared::normalize_utf8(
+                                source, converter, storage
+                            );
+                        has_nonmissing = has_nonmissing || !source.is_na();
+                    }
+                }
+
+                const shared::ParallelPlan plan = shared::parallel_plan(
+                    true, length
+                );
+                Body body(
+                    source_views, normalized, scan.direct, has_nonmissing,
+                    options, output, root_fallback_warning
+                );
+                shared::run_parallel(plan, length, body);
+
+                CHARR_UNWIND_RETURN();
+            }
+        );
+        CHARR_UNWIND_KEEP_RESULT();
+    }
+    CHARR_ENTRYPOINT_END(
+        if (root_fallback_warning)
+            emit_fallback_warning_r();
+    );
+}
+
+} } // namespace charr::altrep_backend

@@ -1,0 +1,146 @@
+# Copied from stringi; stri_* renamed to ci_*.
+# kate: default-dictionary en_US
+
+## This file is part of the 'stringi' package for R.
+## Copyright (c) 2013-2025, Marek Gagolewski <https://www.gagolewski.com/>
+## All rights reserved.
+##
+## Redistribution and use in source and binary forms, with or without
+## modification, are permitted provided that the following conditions are met:
+##
+## 1. Redistributions of source code must retain the above copyright notice,
+## this list of conditions and the following disclaimer.
+##
+## 2. Redistributions in binary form must reproduce the above copyright notice,
+## this list of conditions and the following disclaimer in the documentation
+## and/or other materials provided with the distribution.
+##
+## 3. Neither the name of the copyright holder nor the names of its
+## contributors may be used to endorse or promote products derived from
+## this software without specific prior written permission.
+##
+## THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+## 'AS IS' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING,
+## BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+## FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+## HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+## SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+## PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS;
+## OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+## WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+## OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+## EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+# @title
+# Perform or Check For Unicode Normalization
+#
+# @description
+# These functions convert strings to NFC, NFKC, NFD, NFKD, or NFKC_Casefold
+# Unicode Normalization Form or check whether strings are normalized.
+#
+# @details
+# Unicode Normalization Forms are formally defined normalizations of Unicode
+# strings which, e.g., make possible to determine whether any two
+# strings are equivalent.
+# Essentially, the Unicode Normalization Algorithm puts all combining
+# marks in a specified order, and uses rules for decomposition
+# and composition to transform each string into one of the
+# Unicode Normalization Forms.
+#
+# The following Normalization Forms (NFs) are supported:
+# \itemize{
+# \item NFC (Canonical Decomposition, followed by Canonical Composition),
+# \item NFD (Canonical Decomposition),
+# \item NFKC (Compatibility Decomposition, followed by Canonical Composition),
+# \item NFKD (Compatibility Decomposition),
+# \item NFKC_Casefold (combination of NFKC, case folding, and removing ignorable
+#  characters which was introduced with Unicode 5.2).
+# }
+#
+# Note that many W3C Specifications recommend using NFC for all content,
+# because this form avoids potential interoperability problems arising
+# from the use of canonically equivalent, yet different,
+# character sequences in document formats on the Web.
+# Thus, you will rather not use these functions in typical
+# string processing activities. Most often you may assume
+# that a string is in NFC, see RFC5198.
+#
+# As usual in \pkg{stringi},
+# if the input character vector is in the native encoding,
+# it will be automatically converted to UTF-8.
+#
+# For more general text transforms refer to \code{\link{ci_trans_general}}.
+#
+#
+# @param str character vector to be encoded
+#
+# @return The \code{ci_trans_nf*} functions return a character vector
+# of the same length as input (the output is always in UTF-8).
+#
+# \code{ci_trans_isnf*} return a logical vector.
+#
+# @references
+# \emph{Unicode Normalization Forms} -- Unicode Standard Annex #15,
+#    \url{https://unicode.org/reports/tr15/}
+#
+# \emph{Unicode Format for Network Interchange}
+# -- RFC5198, \url{https://www.rfc-editor.org/rfc/rfc5198}
+#
+# \emph{Character Model for the World Wide Web 1.0: Normalization}
+# -- W3C Working Draft, \url{https://www.w3.org/TR/charmod-norm/}
+#
+# \emph{Normalization} -- ICU User Guide,
+#    \url{https://unicode-org.github.io/icu/userguide/transforms/normalization/}
+#    (technical details)
+#
+# \emph{Unicode Equivalence} -- Wikipedia,
+# \url{https://en.wikipedia.org/wiki/Unicode_equivalence}
+#
+# @examples
+# ci_trans_nfd('\u0105') # a with ogonek -> a, ogonek
+# ci_trans_nfkc('\ufdfa') # 1 codepoint -> 18 codepoints
+#
+# @export
+# @rdname ci_trans_nf
+# @family transform
+ci_trans_nfc <- function(str)
+{
+    .Call(C_ci_trans_nfc, str)
+}
+
+
+# @rdname ci_trans_nf
+# @export
+
+
+# @rdname ci_trans_nf
+# @export
+
+
+# @rdname ci_trans_nf
+# @export
+
+
+# @rdname ci_trans_nf
+# @export
+
+
+# @rdname ci_trans_nf
+# @export
+
+
+# @rdname ci_trans_nf
+# @export
+
+
+# @rdname ci_trans_nf
+# @export
+
+
+# @rdname ci_trans_nf
+# @export
+
+
+# @rdname ci_trans_nf
+# @export

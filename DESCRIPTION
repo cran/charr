@@ -1,0 +1,65 @@
+Package: charr
+Title: String Processing Reimagined for 'ALTREP' Strings
+Version: 0.1.0
+Date: 2026-09-26
+Authors@R: c(
+    person("Travers", "Ching", , "traversc@gmail.com", role = c("aut", "cre", "cph")),
+    person("Hadley", "Wickham", , "hadley@posit.co", role = c("ctb", "cph"),
+           comment = "Author of stringr, of which charr is a fork"),
+    person("Posit Software, PBC", role = c("ctb", "cph"),
+           comment = "Copyright holder of stringr"),
+    person("Unicode, Inc. and others", role = c("ctb", "cph"),
+           comment = "ICU4C source code and data (Unicode License v3)"),
+    person("Marek", "Gagolewski", role = c("ctb", "cph"),
+           comment = "Author of stringi; stringi implementation used by charr"),
+    person("R Consortium", role = "fnd",
+           comment = "Infrastructure Steering Committee grant: Universal ALTREP Interoperability for Strings")
+  )
+Description: An experimental fork of 'stringr'. The functions and semantics
+    are the same, apart from differences between 'ICU' and Unicode versions,
+    but everything is optimized around 'ALTREP' strings (custom
+    high-performance string storage), allowing for faster and more efficient
+    operation.
+License: MIT + file LICENSE
+Copyright: Copyright (c) 2026 Travers Ching. Portions derived from the
+        'stringr' package are copyright (c) 2023 stringr authors;
+        current upstream metadata identifies Hadley Wickham and Posit
+        Software, PBC as copyright holders. Those portions are used
+        under the MIT License. Included R and C++ code from 'stringi'
+        is copyright (c) 2013-2025 Marek Gagolewski and is used under
+        the BSD 3-Clause License. Bundled ICU4C 78.3 source code and
+        data are copyright (c) 2016-2025 Unicode, Inc., with additional
+        holders and terms identified in ICU's third-party notices,
+        under the Unicode License v3 and the applicable component
+        licenses. The source package includes LICENSE.note; installed
+        notices are supplied as COPYRIGHTS and icu/LICENSE.
+URL: https://github.com/charbase/charr,
+        https://charbase.github.io/charr/
+BugReports: https://github.com/charbase/charr/issues
+Depends: R (>= 4.1.0)
+Imports: charport (>= 0.1.1), cli, glue (>= 1.6.1), lifecycle (>=
+        1.0.3), rlang (>= 1.0.0), stringi (>= 1.5.3), vctrs (>= 0.4.0)
+LinkingTo: charport (>= 0.1.1)
+Suggests: htmltools, htmlwidgets, quarto, testthat (>= 3.0.0)
+VignetteBuilder: quarto
+SystemRequirements: GNU make, C++17, ICU4C 78.2 or 78.3 (optional;
+        bundled otherwise)
+Config/testthat/edition: 3
+Config/Needs/website: pkgdown, xml2
+Encoding: UTF-8
+LazyData: true
+Config/roxygen2/version: 8.0.0
+NeedsCompilation: yes
+Packaged: 2026-09-27 02:16:06 UTC; ted
+Author: Travers Ching [aut, cre, cph],
+  Hadley Wickham [ctb, cph] (Author of stringr, of which charr is a fork),
+  Posit Software, PBC [ctb, cph] (Copyright holder of stringr),
+  Unicode, Inc. and others [ctb, cph] (ICU4C source code and data
+    (Unicode License v3)),
+  Marek Gagolewski [ctb, cph] (Author of stringi; stringi implementation
+    used by charr),
+  R Consortium [fnd] (Infrastructure Steering Committee grant: Universal
+    ALTREP Interoperability for Strings)
+Maintainer: Travers Ching <traversc@gmail.com>
+Repository: CRAN
+Date/Publication: 2026-10-07 08:30:31 UTC
